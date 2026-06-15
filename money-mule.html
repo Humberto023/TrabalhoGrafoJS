@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Detector de Money Mule</title>
+
+  <!-- Biblioteca vis-network: responsável por desenhar o grafo no navegador -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.css"/>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      color: #f8fafc;
+      margin-bottom: 4px;
+    }
+
+    .subtitulo {
+      font-size: 0.9rem;
+      color: #94a3b8;
+      margin-bottom: 24px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      gap: 20px;
+    }
+
+    /* Área onde o grafo é desenhado */
+    #grafo {
+      background: #1e2230;
+      border: 1px solid #2d3748;
+      border-radius: 12px;
+      height: 520px;
+    }
+
+    /* Painel lateral com os resultados */
+    .painel {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .card {
+      background: #1e2230;
+      border: 1px solid #2d3748;
+      border-radius: 12px;
+      padding: 16px;
+    }
+
+    .card h2 {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #64748b;
+      margin-bottom: 12px;
+    }
+
+    /* Cada linha de conta no painel */
+    .conta-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 10px;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      font-size: 0.88rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .conta-item:hover { background: #2d3748; }
+
+    .conta-item.suspeita {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .badge {
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 99px;
+      font-weight: 600;
+    }
+
+    .badge.suspeita { background: #ef4444; color: white; }
+    .badge.normal   { background: #22c55e; color: white; }
+
+    /* Caixa de detalhes ao clicar em uma conta */
+    #detalhe {
+      font-size: 0.85rem;
+      line-height: 1.8;
+      color: #cbd5e1;
+    }
+
+    #detalhe strong { color: #f1f5f9; }
+
+    .legenda {
+      display: flex;
+      gap: 16px;
+      font-size: 0.8rem;
+      color: #94a3b8;
+      margin-top: 10px;
+    }
+
+    .legenda span { display: flex; align-items: center; gap: 6px; }
+
+    .dot {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .dot.suspeita { background: #ef4444; }
+    .dot.normal   { background: #3b82f6; }
+    .dot.origem   { background: #a855f7; }
+    .dot.destino  { background: #f59e0b; }
+  </style>
+</head>
+<body>
+
+  <h1>🔍 Detector de Money Mule</h1>
+  <p class="subtitulo">Análise de transações financeiras via grafos — identificação de contas suspeitas</p>
+
+  <div class="layout">
+    <!-- Área do grafo -->
+    <div>
+      <div id="grafo"></div>
+      <div class="legenda">
+        <span><span class="dot suspeita"></span> Suspeita (money mule)</span>
+        <span><span class="dot normal"></span> Normal</span>
+        <span><span class="dot origem"></span> Origem dos fundos</span>
+        <span><span class="dot destino"></span> Destino final</span>
+      </div>
+    </div>
+
+    <!-- Painel lateral -->
+    <div class="painel">
+      <div class="card">
+        <h2>Contas Analisadas</h2>
+        <div id="lista-contas"></div>
+      </div>
+
+      <div class="card">
+        <h2>Detalhes da Conta</h2>
+        <div id="detalhe">Clique em uma conta no grafo ou na lista para ver os detalhes.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ─────────────────────────────────────────────
+    // 1. DADOS SIMULADOS
+    // Aqui definimos os nós (contas) e arestas (transferências)
+    // ─────────────────────────────────────────────
+
+    const nos = [
+      { id: "C001", rotulo: "Conta 001", tipo: "origem" },
+      { id: "C002", rotulo: "Conta 002", tipo: "origem" },
+      { id: "C003", rotulo: "Conta 003", tipo: "origem" },
+      { id: "C004", rotulo: "Conta 004", tipo: "mule" },   // suspeita
+      { id: "C005", rotulo: "Conta 005", tipo: "mule" },   // suspeita
+      { id: "C006", rotulo: "Conta 006", tipo: "destino" },
+      { id: "C007", rotulo: "Conta 007", tipo: "destino" },
+      { id: "C008", rotulo: "Conta 008", tipo: "normal" },
+    ]
+
+    const arestas = [
+      { de: "C001", para: "C004", valor: 8000,  tempo: 1 },
+      { de: "C002", para: "C004", valor: 6000,  tempo: 2 },
+      { de: "C003", para: "C004", valor: 5000,  tempo: 3 },
+      { de: "C004", para: "C006", valor: 17500, tempo: 4 }, // repassou quase tudo
+      { de: "C001", para: "C005", valor: 4000,  tempo: 2 },
+      { de: "C003", para: "C005", valor: 9000,  tempo: 3 },
+      { de: "C005", para: "C007", valor: 12500, tempo: 5 }, // repassou quase tudo
+      { de: "C008", para: "C006", valor: 1000,  tempo: 1 }, // transação normal
+    ]
+
+    // ─────────────────────────────────────────────
+    // 2. ALGORITMO DE DETECÇÃO
+    // Percorre as arestas e calcula as métricas de cada conta
+    // ─────────────────────────────────────────────
+
+    // Cria um objeto vazio que vai guardar as métricas de cada conta
+    const metricas = {}
+
+    // Inicializa as métricas zeradas para cada nó
+    for (const no of nos) {
+      metricas[no.id] = {
+        rotulo: no.rotulo,
+        grauEntrada: 0,     // quantas contas enviam dinheiro pra ela
+        grauSaida: 0,       // quantas contas ela envia dinheiro
+        totalRecebido: 0,   // soma de tudo que recebeu
+        totalEnviado: 0,    // soma de tudo que enviou
+        score: 0,           // pontuação de suspeição (calculada depois)
+        suspeita: false     // flag final: é suspeita ou não?
+      }
+    }
+
+    // Percorre cada aresta e acumula as métricas nos dois lados (quem enviou e quem recebeu)
+    for (const aresta of arestas) {
+      // Quem ENVIOU: aumenta grau de saída e total enviado
+      metricas[aresta.de].grauSaida += 1
+      metricas[aresta.de].totalEnviado += aresta.valor
+
+      // Quem RECEBEU: aumenta grau de entrada e total recebido
+      metricas[aresta.para].grauEntrada += 1
+      metricas[aresta.para].totalRecebido += aresta.valor
+    }
+
+    // Calcula score e marca suspeitas
+    for (const id in metricas) {
+      const m = metricas[id]
+
+      // Taxa de retenção: quanto do dinheiro ficou na conta
+      // Se recebeu 10000 e enviou 9500, reteve apenas 5% → muito suspeito
+      const taxaRetencao = m.totalRecebido > 0
+        ? (m.totalRecebido - m.totalEnviado) / m.totalRecebido
+        : 1 // se nunca recebeu dinheiro, reteve 100% (não é suspeita)
+
+      // Score: baixa retenção + muitas conexões = mais suspeito
+      // Quanto menor a retenção, mais próximo de 1 fica (1 - taxaRetencao)
+      m.score = Math.round((1 - taxaRetencao) * 50 + (m.grauEntrada + m.grauSaida) * 5)
+
+      // Define como suspeita se o score passar de 40
+      m.suspeita = m.score > 40
+    }
+
+    // ─────────────────────────────────────────────
+    // 3. MONTAR O GRAFO VISUAL (vis-network)
+    // Transforma nossos dados em formato que a biblioteca entende
+    // ─────────────────────────────────────────────
+
+    // Cores de cada tipo de conta
+    const cores = {
+      suspeita: { fundo: "#ef4444", borda: "#b91c1c" },
+      normal:   { fundo: "#3b82f6", borda: "#1d4ed8" },
+      origem:   { fundo: "#a855f7", borda: "#7e22ce" },
+      destino:  { fundo: "#f59e0b", borda: "#b45309" },
+    }
+
+    // Monta a lista de nós para a biblioteca
+    const nosVisuais = nos.map(no => {
+      const m = metricas[no.id]
+      // Se o algoritmo marcou como suspeita, usa a cor vermelha; senão, usa a cor do tipo original
+      const cor = m.suspeita ? cores.suspeita : cores[no.tipo] || cores.normal
+
+      return {
+        id: no.id,
+        label: no.rotulo + (m.suspeita ? "\n⚠️ SUSPEITA" : ""),
+        color: { background: cor.fundo, border: cor.borda },
+        font: { color: "#ffffff", size: 13 },
+        size: 28,
+        borderWidth: m.suspeita ? 3 : 1,
+      }
+    })
+
+    // Monta a lista de arestas para a biblioteca
+    const arestasVisuais = arestas.map(a => ({
+      from: a.de,
+      to: a.para,
+      label: `R$ ${a.valor.toLocaleString("pt-BR")}`,
+      arrows: "to",                          // seta indicando direção da transferência
+      color: { color: "#475569" },
+      font: { color: "#94a3b8", size: 11, align: "middle" },
+      smooth: { type: "curvedCW", roundness: 0.2 }
+    }))
+
+    // Inicializa o grafo na div #grafo
+    const rede = new vis.Network(
+      document.getElementById("grafo"),
+      { nodes: nosVisuais, edges: arestasVisuais },
+      {
+        physics: { stabilization: true },
+        interaction: { hover: true }
+      }
+    )
+
+    // ─────────────────────────────────────────────
+    // 4. PAINEL LATERAL — Lista de contas
+    // ─────────────────────────────────────────────
+
+    const listaEl = document.getElementById("lista-contas")
+
+    for (const no of nos) {
+      const m = metricas[no.id]
+
+      // Cria um elemento div para cada conta
+      const item = document.createElement("div")
+      item.className = "conta-item" + (m.suspeita ? " suspeita" : "")
+      item.innerHTML = `
+        <span>${no.rotulo}</span>
+        <span class="badge ${m.suspeita ? "suspeita" : "normal"}">
+          ${m.suspeita ? "Suspeita" : "Normal"}
+        </span>
+      `
+
+      // Ao clicar na conta da lista, mostra detalhes e destaca no grafo
+      item.addEventListener("click", () => mostrarDetalhe(no.id))
+      listaEl.appendChild(item)
+    }
+
+    // ─────────────────────────────────────────────
+    // 5. FUNÇÃO DE DETALHE
+    // Exibe as métricas de uma conta ao clicar
+    // ─────────────────────────────────────────────
+
+    function mostrarDetalhe(id) {
+      const m = metricas[id]
+
+      const taxaRetencao = m.totalRecebido > 0
+        ? ((m.totalRecebido - m.totalEnviado) / m.totalRecebido * 100).toFixed(1)
+        : 100
+
+      document.getElementById("detalhe").innerHTML = `
+        <strong>${m.rotulo}</strong><br><br>
+        Grau de entrada: <strong>${m.grauEntrada}</strong> (recebe de ${m.grauEntrada} contas)<br>
+        Grau de saída: <strong>${m.grauSaida}</strong> (envia para ${m.grauSaida} contas)<br>
+        Total recebido: <strong>R$ ${m.totalRecebido.toLocaleString("pt-BR")}</strong><br>
+        Total enviado: <strong>R$ ${m.totalEnviado.toLocaleString("pt-BR")}</strong><br>
+        Taxa de retenção: <strong>${taxaRetencao}%</strong><br>
+        Score de suspeição: <strong>${m.score}</strong><br><br>
+        Resultado: <strong style="color:${m.suspeita ? '#ef4444' : '#22c55e'}">
+          ${m.suspeita ? "⚠️ CONTA SUSPEITA" : "✅ Conta Normal"}
+        </strong>
+      `
+
+      // Destaca o nó clicado no grafo
+      rede.selectNodes([id])
+      rede.focus(id, { scale: 1.2, animation: true })
+    }
+
+    // Ao clicar em um nó diretamente no grafo, também mostra o detalhe
+    rede.on("click", params => {
+      if (params.nodes.length > 0) {
+        mostrarDetalhe(params.nodes[0])
+      }
+    })
+  </script>
+</body>
+</html>
